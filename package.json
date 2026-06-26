@@ -16,6 +16,7 @@
   "keywords": ["tron", "grid", "api", "clu", "iso", "encom"],
   "dependencies": {
     "express":              "4.16.4",
+    "mysql2":               "2.3.0",
     "body-parser":          "1.18.3",
     "cors":                 "2.8.4",
     "mongoose":             "5.6.13",

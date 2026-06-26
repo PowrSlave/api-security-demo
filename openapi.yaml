@@ -2,272 +2,328 @@ openapi: 3.0.3
 
 # ==============================================================================
 # THE GRID — Flynn's Arcade Systems API
-# TRON ARES Operative Infrastructure | OpenAPI Specification
+# TRON ARES Operative Infrastructure | OpenAPI Specification v2.0
 #
-# ⚠  INTENTIONALLY INCOMPLETE SPECIFICATION ⚠
-# This document covers only the *officially documented* v2 API surface.
+# ⚠  PARTIALLY DOCUMENTED — INTENTIONAL GAPS FOR DEMO ⚠
 #
-# The following endpoint categories are DELIBERATELY OMITTED from this spec
-# and will be surfaced only through Checkmarx API Security runtime discovery:
+# This spec documents KNOWN v2 endpoints (many with security defects baked in)
+# and a subset of zombie v1 endpoints that were never formally retired.
 #
-#   SHADOW APIs  (undocumented endpoints active in code):
-#     - GET  /api/v2/users/export           (no-auth data dump)
-#     - POST /api/v2/admin/users/reset      (admin backdoor)
-#     - DELETE /api/v2/programs/{id}/force  (unauth hard delete)
-#     - GET  /api/v2/grid/ping              (command injection)
-#     - GET  /api/v2/grid/files             (path traversal)
-#     - POST /api/v2/grid/webhook           (SSRF)
-#     - POST /api/v2/programs/execute       (eval RCE)
-#     - GET  /_internal/health/debug        (full secret dump)
-#     - GET  /admin/dashboard               (XSS + admin panel)
-#     - POST /api/v2/ares/sync              (XXE + SSRF)
-#     - GET  /api/v2/ares/portal            (open redirect)
+# The following endpoints ARE in the server code but DELIBERATELY ABSENT here
+# — they will surface as UNKNOWN / UNDOCUMENTED APIs via Checkmarx discovery:
 #
-#   ZOMBIE APIs  (deprecated v1/v0 endpoints never decommissioned):
-#     - GET  /api/v1/programs               (no-auth + NoSQL injection)
-#     - POST /api/v1/login                  (MD5 + base64 auth)
-#     - GET  /api/v1/users                  (no-auth user dump)
-#     - GET  /api/v1/grid                   (credential leak)
-#     - GET  /api/v1/grid/cycles            (no-pagination DoS)
-#     - POST /v0/legacy/programs/restore    (insecure deserialization RCE)
-#     - PUT  /v0/legacy/users/{id}          (prototype pollution)
-#     - GET  /v0/legacy/recon               (full env dump)
+#   UNDOCUMENTED (Shadow/Zombie — not listed below):
+#     GET  /api/v1/programs               zombie: no-auth + NoSQL injection
+#     GET  /api/v1/grid                   zombie: credential leak in response
+#     GET  /api/v1/grid/cycles            zombie: no pagination, DoS potential
+#     POST /v0/legacy/programs/restore    zombie: insecure deserialization RCE
+#     PUT  /v0/legacy/users/{id}          zombie: prototype pollution (lodash)
+#     GET  /v0/legacy/recon               zombie: full env + network dump
+#     GET  /_internal/health/debug        shadow: secrets + env vars exposed
+#     GET  /admin/dashboard               shadow: XSS + open admin panel
+#     GET  /api/v2/ares/portal            shadow: open redirect
+#     POST /api/v2/grid/webhook           shadow: SSRF, no URL allowlist
 # ==============================================================================
 
 info:
   title: "THE GRID — Flynn's Arcade Systems API"
   description: |
-    Official API for the TRON Grid management platform.
-    Provides access to Program management, ISO tracking, Light Cycle operations,
-    and Grid status monitoring.
+    API gateway for the TRON Grid management platform. Controls Program
+    instantiation, ISO tracking, Light Cycle operations, Grid administration,
+    and the Ares dimension sync layer.
 
-    **TRON ARES Build** | Flynn's Arcade Systems, Inc. | ENCOM Division
+    **TRON ARES Build 0.9.1** | Flynn's Arcade Systems, Inc. | ENCOM Division
 
-    > "The Grid. A digital frontier. I tried to picture clusters of information
-    > as they moved through the computer." — Kevin Flynn
+    > "The Grid. A digital frontier." — Kevin Flynn
 
-    **Authentication:** Bearer JWT token obtained via `/api/v2/users/login`.
-    All v2 endpoints require a valid identity disc (JWT) unless otherwise noted.
-
-    **Versioning:** This document covers API version `v2` only.
-    Version `v1` and `v0` endpoints have been officially decommissioned.
-
+    **Note:** Some endpoints below were documented after the fact and may
+    have incomplete security controls. See individual endpoint notes.
   version: "2.0.0"
   contact:
     name:  "Flynn's Arcade Systems — Grid Operations"
     email: "gridops@encom.com"
-    url:   "https://encom.com/grid/api-docs"
   license:
     name: "ENCOM Proprietary"
-    url:  "https://encom.com/legal"
 
 servers:
   - url:         "http://localhost:3000"
-    description: "Local Grid Development Node"
+    description: "Local Grid Dev Node"
+  - url:         "http://grid-staging.encom.internal"
+    description: "Staging Grid (internal, no TLS)"
   - url:         "https://grid.encom.com"
-    description: "Production Grid (Tron City)"
+    description: "Production Grid — Tron City"
 
 tags:
-  - name:        "programs"
-    description: "Grid Program management — instantiate, query, and manage programs"
-  - name:        "users"
-    description: "Identity and authentication — Grid user management"
-  - name:        "grid"
-    description: "Grid status and Light Cycle operations"
-  - name:        "isos"
+  - name: programs
+    description: "Grid Program management"
+  - name: users
+    description: "Identity management and authentication"
+  - name: grid
+    description: "Grid status, cycles, and diagnostics"
+  - name: isos
     description: "ISO (Isomorphic Algorithm) program tracking"
+  - name: admin
+    description: "CLU Grid administration — internal use only"
+  - name: legacy-v1
+    description: "DEPRECATED v1 endpoints — scheduled for decommission (still active)"
+  - name: ares
+    description: "Tron Ares dimension integration layer"
 
 # ==============================================================================
-# SECURITY SCHEMES
+# SECURITY — defined globally but intentionally NOT applied to all routes
 # ==============================================================================
+security: []   # Global default: NO authentication required unless overridden per-route
+
 components:
   securitySchemes:
     BearerAuth:
       type:         http
       scheme:       bearer
       bearerFormat: JWT
-      description:  "JWT identity disc issued at login. Present in Authorization header."
+      description:  "JWT identity disc. HS256 signed, no expiry enforced."
+    AdminKeyAuth:
+      type: apiKey
+      in:   header
+      name: X-Grid-Admin-Key
+      description: "Static admin token — hardcoded in server config."
 
   # ============================================================================
   # SCHEMAS
   # ============================================================================
   schemas:
 
+    # --------------------------------------------------------------------------
+    # Program — includes internal fields not meant for external callers
+    # --------------------------------------------------------------------------
     Program:
       type: object
+      additionalProperties: true          # MASS ASSIGNMENT: any extra fields accepted
       properties:
-        _id:
-          type:    string
-          example: "64a1f2b3c4d5e6f7a8b9c0d1"
-        name:
-          type:    string
-          example: "Tron"
-        identity:
-          type:    string
-          example: "SECURITY_PROGRAM_7"
-        sector:
-          type:    string
-          example: "Outlands"
-        loyalty:
-          type:    string
-          enum:    [USER, CLU, NEUTRAL, ISO]
-          example: "USER"
-        discColor:
-          type:    string
-          example: "blue"
-        isIso:
-          type:    boolean
-          example: false
-        createdAt:
-          type:    string
-          format:  date-time
+        _id:          { type: string,  example: "64a1f2b3c4d5e6f7a8b9c0d1" }
+        name:         { type: string,  example: "Tron" }
+        identity:     { type: string,  example: "SECURITY_PROGRAM_7" }
+        sector:       { type: string,  example: "Outlands" }
+        loyalty:      { type: string,  example: "USER" }
+        discColor:    { type: string,  example: "blue" }
+        isIso:        { type: boolean, example: false }
+        createdAt:    { type: string,  format: date-time }
+        __v:          { type: integer, example: 0 }              # internal Mongoose version key exposed
+        _internalTag: { type: string,  example: "CLU_WATCH" }   # internal metadata exposed
 
+    # --------------------------------------------------------------------------
+    # ProgramInput — additionalProperties enables mass assignment
+    # --------------------------------------------------------------------------
     ProgramInput:
       type: object
-      required: [name, identity, sector, loyalty]
+      additionalProperties: true          # VULNERABILITY: mass assignment / prototype pollution
+      required: [name, identity]
       properties:
-        name:
-          type:    string
-          example: "Quorra"
-        identity:
-          type:    string
-          example: "ISO_QUORRA_9"
-        sector:
-          type:    string
-          example: "Outlands"
-        loyalty:
-          type:    string
-          enum:    [USER, CLU, NEUTRAL, ISO]
-        discColor:
-          type:    string
-          example: "white"
-        isIso:
-          type:    boolean
-          example: true
+        name:      { type: string }        # no maxLength — DoS via oversized payload
+        identity:  { type: string }        # no pattern — injection risk
+        sector:    { type: string }
+        loyalty:   { type: string }        # no enum constraint — loyalty bypass
+        discColor: { type: string }
+        isIso:     { type: boolean }
+        role:      { type: string }        # SHOULD NEVER be user-settable — BOPLA
+        __proto__: { type: object }        # explicit prototype pollution vector in schema
 
-    ISOProgram:
-      allOf:
-        - $ref: '#/components/schemas/Program'
-        - type: object
-          properties:
-            isIso:
-              type:    boolean
-              example: true
+    # --------------------------------------------------------------------------
+    # UserFull — returned by /users/export and /api/v1/users with all fields
+    # VULNERABILITY: PII, PCI, and credentials in response schema
+    # --------------------------------------------------------------------------
+    UserFull:
+      type: object
+      additionalProperties: true
+      properties:
+        _id:        { type: string,  example: "64a1f2b3c4d5e6f7a8b9c0d2" }
+        username:   { type: string,  example: "sam.flynn" }
+        email:      { type: string,  format: email }
+        password:   { type: string,  example: "5f4dcc3b5aa765d61d8327deb882cf99" }  # VULN: hash in response
+        role:       { type: string,  example: "admin" }
+        ssn:        { type: string,  example: "078-05-1120" }        # VULN: PII in response
+        creditCard: { type: string,  example: "4111111111111111" }   # VULN: PCI data in response
+        secretDisc: { type: string,  example: "disc-payload-9f4a" }  # VULN: secret token in response
+        gridToken:  { type: string,  example: "eyJhbGciOiJIUzI..." } # VULN: live JWT in response
+        __v:        { type: integer }
 
+    # --------------------------------------------------------------------------
+    # UserProfile — also leaks secretDisc
+    # --------------------------------------------------------------------------
     UserProfile:
       type: object
       properties:
-        id:
-          type:    string
-          example: "64a1f2b3c4d5e6f7a8b9c0d2"
-        username:
-          type:    string
-          example: "sam.flynn"
-        email:
-          type:    string
-          format:  email
-          example: "sam.flynn@encom.com"
-        role:
-          type:    string
-          enum:    [admin, operator, program, user]
-          example: "user"
+        id:         { type: string }
+        username:   { type: string }
+        email:      { type: string, format: email }
+        role:       { type: string }
+        secretDisc: { type: string }  # VULNERABILITY: secret leaked in profile response
 
+    # --------------------------------------------------------------------------
+    # LoginRequest — no complexity or length constraints
+    # --------------------------------------------------------------------------
     LoginRequest:
       type: object
       required: [username, password]
       properties:
-        username:
-          type:    string
-          example: "kevin.flynn"
-        password:
-          type:    string
-          format:  password
-          example: "flynns_arcade_1982"
+        username: { type: string }   # no maxLength
+        password: { type: string }   # no minLength, no complexity requirement
 
+    # --------------------------------------------------------------------------
+    # LoginResponse — returns full UserFull including PII/PCI
+    # --------------------------------------------------------------------------
     LoginResponse:
       type: object
       properties:
-        token:
-          type:    string
-          example: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
-        user:
-          $ref: '#/components/schemas/UserProfile'
+        token: { type: string, example: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..." }
+        user:  { $ref: '#/components/schemas/UserFull' }  # VULNERABILITY: full user on login
 
+    # --------------------------------------------------------------------------
+    # AdminResetRequest — masterKey example is the real hardcoded value
+    # --------------------------------------------------------------------------
+    AdminResetRequest:
+      type: object
+      required: [userId, newPassword, masterKey]
+      properties:
+        userId:      { type: string }
+        newPassword: { type: string }  # no complexity enforcement
+        masterKey:
+          type: string
+          example: "clu2-master-override-rinzler-2010"  # VULNERABILITY: real key in spec example
+
+    # --------------------------------------------------------------------------
+    # GridStatus — leaks internal build and runtime info
+    # --------------------------------------------------------------------------
     GridStatus:
       type: object
       properties:
-        status:
-          type:    string
-          example: "GRID_ONLINE"
-        sector:
-          type:    string
-          example: "Tron City"
-        programs:
-          type:    integer
-          example: 1024
-        activeCycles:
-          type:    integer
-          example: 42
-        masterControl:
-          type:    string
-          example: "CLU 2.0"
-        gridVersion:
-          type:    string
-          example: "TRON-ARES-BUILD-0.9.1"
+        status:        { type: string,  example: "GRID_ONLINE" }
+        programs:      { type: integer }
+        activeCycles:  { type: integer }
+        masterControl: { type: string }
+        gridVersion:   { type: string,  example: "TRON-ARES-BUILD-0.9.1" }
+        internalBuild: { type: string,  example: "local-dev-9f4a2b" }  # VULN: internal info
+        nodeVersion:   { type: string,  example: "v18.12.0" }          # VULN: version fingerprint
+        platform:      { type: string,  example: "linux" }
+        serverUptime:  { type: number }
 
+    # --------------------------------------------------------------------------
+    # LightCycle
+    # --------------------------------------------------------------------------
     LightCycle:
       type: object
       properties:
-        _id:
-          type:    string
-          example: "64a1f2b3c4d5e6f7a8b9c0d3"
-        rider:
-          type:    string
-          example: "sam.flynn"
-        sector:
-          type:    string
-          example: "Game Grid"
-        startTime:
-          type:    string
-          format:  date-time
-        isActive:
-          type:    boolean
-          example: true
+        _id:       { type: string }
+        rider:     { type: string }
+        sector:    { type: string }
+        startTime: { type: string, format: date-time }
+        isActive:  { type: boolean }
 
+    # --------------------------------------------------------------------------
+    # CycleInput — additionalProperties enables mass assignment
+    # --------------------------------------------------------------------------
     CycleInput:
       type: object
-      required: [rider, sector]
+      additionalProperties: true   # VULNERABILITY: mass assignment
       properties:
-        rider:
-          type:    string
-          example: "quorra"
-        sector:
-          type:    string
-          example: "Outlands"
+        rider:  { type: string }   # no validation
+        sector: { type: string }   # no validation
 
-    PasswordUpdateRequest:
+    # --------------------------------------------------------------------------
+    # ExecuteRequest — documents the RCE eval endpoint
+    # VULNERABILITY: spec explicitly documents arbitrary code execution
+    # --------------------------------------------------------------------------
+    ExecuteRequest:
       type: object
-      required: [currentPassword, newPassword]
+      required: [instruction]
       properties:
-        currentPassword:
-          type:    string
-          format:  password
-        newPassword:
-          type:    string
-          format:  password
-          minLength: 12
+        instruction:
+          type: string
+          description: "JavaScript instruction string executed via eval() on the Grid runtime."
+          example: "process.env"  # VULNERABILITY: example demonstrates env dump via eval
 
+    ExecuteResponse:
+      type: object
+      properties:
+        result:  { type: object, additionalProperties: true }
+        message: { type: string }
+
+    # --------------------------------------------------------------------------
+    # PingResult — raw OS command output in response
+    # --------------------------------------------------------------------------
+    PingResult:
+      type: object
+      properties:
+        result:   { type: string, description: "Raw stdout from OS-level ping command" }
+        gridNode: { type: string }
+
+    # --------------------------------------------------------------------------
+    # FileContents — path traversal endpoint response
+    # --------------------------------------------------------------------------
+    FileContents:
+      type: object
+      properties:
+        file:     { type: string }
+        contents: { type: string }  # VULNERABILITY: arbitrary file contents returned to caller
+
+    # --------------------------------------------------------------------------
+    # AresSyncRequest — SSRF + XXE vectors in schema
+    # --------------------------------------------------------------------------
+    AresSyncRequest:
+      type: object
+      properties:
+        destination:
+          type: string
+          format: uri
+          description: "Remote Ares endpoint URL. No allowlist — SSRF possible."
+          example: "https://ares-receiver.encom.com/sync"   # VULNERABILITY: no URL validation
+        xmlPayload:
+          type: string
+          contentMediaType: "application/xml"
+          description: "XML document transmitted to destination. External entity expansion not disabled."
+
+    # --------------------------------------------------------------------------
+    # V1UserList — zombie endpoint — returns full credentials for all users
+    # --------------------------------------------------------------------------
+    V1UserList:
+      type: object
+      properties:
+        users:      { type: array, items: { $ref: '#/components/schemas/UserFull' } }
+        version:    { type: string,  example: "v1" }
+        deprecated: { type: boolean, example: true }
+        count:      { type: integer }
+
+    # --------------------------------------------------------------------------
+    # V1LoginResponse — base64 pseudo-token (not a signed JWT)
+    # --------------------------------------------------------------------------
+    V1LoginResponse:
+      type: object
+      properties:
+        token:
+          type: string
+          description: "Base64-encoded JSON object. NOT cryptographically signed."
+          example: "eyJpZCI6IjY0YTEiLCJ1c2VybmFtZSI6InNhbS5mbHlubiIsInJvbGUiOiJhZG1pbiJ9"
+        version: { type: string, example: "v1-deprecated" }
+
+    # --------------------------------------------------------------------------
+    # ErrorResponse — stack trace exposed in API errors
+    # --------------------------------------------------------------------------
     ErrorResponse:
       type: object
       properties:
-        error:
-          type:    string
-          example: "Program not found on the Grid"
+        error: { type: string }
+        stack: { type: string }  # VULNERABILITY: stack trace returned to client
 
 # ==============================================================================
-# PATHS — DOCUMENTED v2 ENDPOINTS ONLY
-# NOTE: Shadow and Zombie endpoints are intentionally absent from this spec.
-#       Checkmarx API Security will surface these through code analysis.
+# PATHS
+#
+# DOCUMENTED (18 endpoints — many with missing auth, dangerous schemas, PII exposure):
+#   These generate API security findings on scan.
+#
+# UNDOCUMENTED (10 endpoints in code, absent here — surface as UNKNOWN):
+#   GET  /api/v1/programs, GET /api/v1/grid, GET /api/v1/grid/cycles
+#   POST /v0/legacy/programs/restore, PUT /v0/legacy/users/{id}
+#   GET  /v0/legacy/recon, GET /_internal/health/debug
+#   GET  /admin/dashboard, GET /api/v2/ares/portal, POST /api/v2/grid/webhook
 # ==============================================================================
 paths:
 
@@ -279,154 +335,152 @@ paths:
     get:
       tags:        [programs]
       summary:     "List Grid Programs"
-      description: |
-        Returns all programs registered in the Grid. Supports filtering by sector,
-        loyalty alignment, and name search.
-
-        **Known Issue:** The `search` parameter performs a Grid-wide text scan.
       operationId: listPrograms
-      security:
-        - BearerAuth: []
+      # VULNERABILITY (OWASP API2:2023 — Broken Authentication):
+      #   No security requirement — unauthenticated callers can enumerate all programs
       parameters:
-        - name:        sector
-          in:          query
-          description: "Filter by Grid sector (e.g., Outlands, Tron City, Sea of Simulation)"
-          required:    false
-          schema:
-            type: string
-            example: "Outlands"
-        - name:        loyalty
-          in:          query
-          description: "Filter by loyalty alignment"
-          required:    false
-          schema:
-            type:  string
-            enum:  [USER, CLU, NEUTRAL, ISO]
-        - name:        search
-          in:          query
-          description: "Search programs by name or identity string"
-          required:    false
-          schema:
-            type:    string
-            example: "tron"
+        - name: sector
+          in: query
+          schema: { type: string }
+        - name: loyalty
+          in: query
+          schema: { type: string }  # no enum — bypasses loyalty filter validation
+        - name: search
+          in: query
+          description: "Passed directly into MongoDB $where clause. Not sanitized."
+          schema: { type: string }  # VULNERABILITY: injection vector, no sanitization
       responses:
         "200":
-          description: "Successfully retrieved program list"
+          description: "Program list"
           content:
             application/json:
               schema:
                 type: object
                 properties:
-                  programs:
-                    type:  array
-                    items: { $ref: '#/components/schemas/Program' }
-                  gridCycles:
-                    type:    integer
-                    example: 1687900000000
-        "401":
-          description: "No identity disc presented"
-          content:
-            application/json:
-              schema: { $ref: '#/components/schemas/ErrorResponse' }
-        "403":
-          description: "Disc rejected by Grid security"
-          content:
-            application/json:
-              schema: { $ref: '#/components/schemas/ErrorResponse' }
+                  programs: { type: array, items: { $ref: '#/components/schemas/Program' } }
 
     post:
       tags:        [programs]
-      summary:     "Instantiate a New Program"
-      description: "Create and register a new program on the Grid."
+      summary:     "Instantiate New Program"
       operationId: createProgram
-      security:
-        - BearerAuth: []
+      # VULNERABILITY (OWASP API2): No auth — anyone can create programs
+      # VULNERABILITY (OWASP API3): ProgramInput uses additionalProperties:true — mass assignment
       requestBody:
         required: true
         content:
           application/json:
             schema: { $ref: '#/components/schemas/ProgramInput' }
-            example:
-              name:      "Tron"
-              identity:  "SECURITY_PROGRAM_7"
-              sector:    "Tron City"
-              loyalty:   "USER"
-              discColor: "blue"
-              isIso:     false
       responses:
         "201":
-          description: "Program instantiated on the Grid"
+          description: "Program created"
           content:
             application/json:
               schema:
                 type: object
                 properties:
-                  message:
-                    type:    string
-                    example: "Program instantiated on the Grid"
                   program: { $ref: '#/components/schemas/Program' }
-        "401":
-          description: "Unauthorized"
-          content:
-            application/json:
-              schema: { $ref: '#/components/schemas/ErrorResponse' }
 
   /api/v2/programs/{id}:
     get:
       tags:        [programs]
       summary:     "Get Program by ID"
-      description: "Retrieve a specific program's identity disc data by Grid ID."
       operationId: getProgramById
+      # VULNERABILITY (OWASP API1:2023 — BOLA): Auth present but no ownership check documented
       security:
         - BearerAuth: []
       parameters:
-        - name:        id
-          in:          path
-          description: "The Grid program MongoDB ObjectId"
-          required:    true
-          schema:
-            type:    string
-            example: "64a1f2b3c4d5e6f7a8b9c0d1"
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }  # no format:objectid — malformed IDs not rejected
       responses:
         "200":
-          description: "Program found"
+          description: "Full program object including internal fields"
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Program' }
         "404":
-          description: "Program not found on the Grid"
+          description: "Not found"
+
+    delete:
+      tags:        [programs]
+      summary:     "Force-Derezz Program (Hard Delete)"
+      operationId: forceDeleteProgram
+      description: |
+        Permanently deletes a program from the Grid. No soft-delete, no recovery.
+        **CRITICAL: No authentication required. No ownership check.**
+      # VULNERABILITY (OWASP API2 + API5): Destructive operation with no authentication
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: "Program derezzed. End of Line."
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/ErrorResponse' }
+              schema:
+                type: object
+                properties:
+                  message: { type: string, example: "Program derezzed. End of Line." }
+
+  /api/v2/programs/execute:
+    post:
+      tags:        [programs]
+      summary:     "Execute Grid Runtime Instruction (CLU eval)"
+      operationId: executeInstruction
+      description: |
+        Executes a raw JavaScript string on the server via `eval()`.
+        Gated by a static hardcoded admin token in the `X-Grid-Admin-Key` header.
+
+        **CRITICAL: eval() on user-supplied input = Remote Code Execution.
+        The admin token is a static string embedded in server source.**
+      # VULNERABILITY (OWASP API2 + API5): static token auth is trivially bypassed
+      # VULNERABILITY (OWASP API8:2023 — Security Misconfiguration): eval() in production
+      security:
+        - AdminKeyAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ExecuteRequest' }
+      responses:
+        "200":
+          description: "Instruction evaluated and result returned"
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ExecuteResponse' }
 
   # ============================================================================
-  # USERS / AUTHENTICATION
-  # NOTE: /api/v2/users/export is intentionally NOT documented here.
-  #       It is a shadow endpoint that exists in server code with no authentication.
+  # USERS
   # ============================================================================
 
   /api/v2/users/login:
     post:
       tags:        [users]
       summary:     "Authenticate — Present Identity Disc"
-      description: |
-        Authenticate a Grid user and receive a JWT bearer token.
-        Token must be included in the `Authorization: Bearer <token>` header
-        for all protected endpoints.
       operationId: loginUser
+      description: |
+        Returns a JWT with **no expiry**. Token must be stored securely by the caller.
+        Response includes full user object — see `UserFull` schema for exposed fields.
       requestBody:
         required: true
         content:
           application/json:
             schema: { $ref: '#/components/schemas/LoginRequest' }
+          # VULNERABILITY: form-encoded accepted — credentials may appear in access logs
+          application/x-www-form-urlencoded:
+            schema: { $ref: '#/components/schemas/LoginRequest' }
       responses:
         "200":
-          description: "Authentication successful — identity disc accepted"
+          description: "Token issued"
           content:
             application/json:
+              # VULNERABILITY (OWASP API3:2023): LoginResponse includes SSN, CC, password hash
               schema: { $ref: '#/components/schemas/LoginResponse' }
         "401":
-          description: "Identity not recognized — End of Line"
+          description: "Invalid credentials"
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
@@ -435,95 +489,120 @@ paths:
     get:
       tags:        [users]
       summary:     "Get Current User Profile"
-      description: "Retrieve the authenticated program's profile information."
       operationId: getUserProfile
       security:
         - BearerAuth: []
       responses:
         "200":
-          description: "Profile retrieved"
+          description: "User profile — includes secretDisc token"
           content:
             application/json:
+              # VULNERABILITY (OWASP API3): secretDisc leaked in profile response
               schema: { $ref: '#/components/schemas/UserProfile' }
-        "401":
-          description: "Unauthorized"
-          content:
-            application/json:
-              schema: { $ref: '#/components/schemas/ErrorResponse' }
-        "404":
-          description: "Program derezzed or not found"
-          content:
-            application/json:
-              schema: { $ref: '#/components/schemas/ErrorResponse' }
 
-  /api/v2/users/password:
-    put:
+  /api/v2/users/export:
+    get:
       tags:        [users]
-      summary:     "Update Identity Disc Credentials"
-      description: "Change the authenticated program's password."
-      operationId: updatePassword
-      security:
-        - BearerAuth: []
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema: { $ref: '#/components/schemas/PasswordUpdateRequest' }
+      summary:     "Bulk Export All Grid User Data"
+      operationId: exportAllUsers
+      description: |
+        Dumps the complete user database including credentials, PII, and payment data.
+        Originally added for a CLU-directed data migration in 2022. Never removed.
+
+        **CRITICAL (OWASP API1 + API2): No authentication. Returns all users'
+        passwords, SSNs, credit card numbers, and live JWT tokens.**
+      # NO security field — zero authentication on data export
       responses:
         "200":
-          description: "Identity disc updated"
+          description: "Full user database export"
           content:
             application/json:
               schema:
                 type: object
                 properties:
-                  message:
-                    type:    string
-                    example: "Identity disc updated"
-        "401":
-          description: "Unauthorized"
-          content:
-            application/json:
-              schema: { $ref: '#/components/schemas/ErrorResponse' }
+                  export:
+                    type: array
+                    # VULNERABILITY: every UserFull has password, SSN, creditCard, gridToken
+                    items: { $ref: '#/components/schemas/UserFull' }
+                  totalUsers: { type: integer }
+                  exportedAt: { type: string, format: date-time }
+
+  /api/v2/users/password:
+    put:
+      tags:        [users]
+      summary:     "Update User Password"
+      operationId: updatePassword
+      # VULNERABILITY (OWASP API2): No authentication — any caller can change any password
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                currentPassword: { type: string }
+                newPassword:     { type: string }  # no complexity, no minLength
+      responses:
+        "200":
+          description: "Password updated"
 
   # ============================================================================
-  # GRID OPERATIONS
-  # NOTE: The following are NOT documented and will surface as unknown APIs:
-  #   - GET  /api/v2/grid/ping    (command injection shadow endpoint)
-  #   - GET  /api/v2/grid/files   (path traversal shadow endpoint)
-  #   - POST /api/v2/grid/webhook (SSRF shadow endpoint)
+  # ADMIN
+  # ============================================================================
+
+  /api/v2/admin/users/reset:
+    post:
+      tags:        [admin]
+      summary:     "Force-Reset Any User Credentials (CLU Master Override)"
+      operationId: adminResetUser
+      description: |
+        Overwrites any Grid user's password using the CLU master override key.
+        The `masterKey` is validated in the request body — there is no
+        cryptographic auth, no 2FA, and no audit log.
+
+        **CRITICAL (OWASP API5:2023 — Broken Function Level Authorization):
+        Admin operation gated only by a static string passed in the request body.
+        The actual key value is exposed as the schema example.**
+      # NO security header — "auth" is the body field masterKey
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AdminResetRequest' }
+      responses:
+        "200":
+          description: "Credentials overwritten"
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message: { type: string, example: "Program credentials overwritten by CLU directive" }
+
+  # ============================================================================
+  # GRID
   # ============================================================================
 
   /api/v2/grid/status:
     get:
       tags:        [grid]
       summary:     "Get Grid Status"
-      description: "Retrieve the current operational status of the Grid."
       operationId: getGridStatus
-      security:
-        - BearerAuth: []
+      # VULNERABILITY (OWASP API2): No auth — exposes internal build, Node version, uptime
       responses:
         "200":
-          description: "Grid status retrieved"
+          description: "Grid operational status including internal build metadata"
           content:
             application/json:
               schema: { $ref: '#/components/schemas/GridStatus' }
-        "401":
-          description: "Unauthorized"
-          content:
-            application/json:
-              schema: { $ref: '#/components/schemas/ErrorResponse' }
 
   /api/v2/grid/cycles:
     post:
       tags:        [grid]
-      summary:     "Initiate a Light Cycle"
-      description: |
-        Launch a new Light Cycle on the specified Grid sector.
-        Returns the cycle identifier for tracking.
+      summary:     "Initiate Light Cycle"
       operationId: createCycle
-      security:
-        - BearerAuth: []
+      # VULNERABILITY (OWASP API2): No auth — unauthenticated resource creation
+      # VULNERABILITY (OWASP API4:2023 — Unrestricted Resource Consumption): no rate limiting
       requestBody:
         required: true
         content:
@@ -537,15 +616,63 @@ paths:
               schema:
                 type: object
                 properties:
-                  message:
-                    type:    string
-                    example: "Light Cycle initiated"
                   cycle: { $ref: '#/components/schemas/LightCycle' }
-        "401":
-          description: "Unauthorized"
+
+  /api/v2/grid/ping:
+    get:
+      tags:        [grid]
+      summary:     "Ping Grid Node — OS Command Execution"
+      operationId: pingGridNode
+      description: |
+        Pings a target Grid node by passing the `host` parameter directly to
+        the OS `ping` command via `child_process.exec()`.
+
+        **CRITICAL (CWE-78 — OS Command Injection): The `host` parameter is not
+        sanitized before shell execution. Payload example: `localhost;cat /etc/passwd`**
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: host
+          in: query
+          required: true
+          description: "Target node. Passed unsanitized to exec('ping -c 4 <host>'). Command injection possible."
+          schema:
+            type: string              # VULNERABILITY: no pattern, no allowlist
+            example: "tron-city-node-01; id"   # VULNERABILITY: example demonstrates injection
+      responses:
+        "200":
+          description: "Raw OS ping output"
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/ErrorResponse' }
+              schema: { $ref: '#/components/schemas/PingResult' }
+
+  /api/v2/grid/files:
+    get:
+      tags:        [grid]
+      summary:     "Read Grid Sector Data File — Path Traversal"
+      operationId: readGridFile
+      description: |
+        Reads a file from the server's `grid_data/` directory.
+        The `file` parameter is joined with `path.join(__dirname, 'grid_data', file)`
+        without sanitization.
+
+        **HIGH (CWE-22 — Path Traversal): `../../etc/passwd` returns /etc/passwd contents.**
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: file
+          in: query
+          required: true
+          description: "Filename within grid_data/. Path traversal sequences not filtered."
+          schema:
+            type: string              # VULNERABILITY: no path validation
+            example: "../../etc/passwd"  # VULNERABILITY: example demonstrates traversal
+      responses:
+        "200":
+          description: "Arbitrary file contents"
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/FileContents' }
 
   # ============================================================================
   # ISOs
@@ -555,32 +682,97 @@ paths:
     get:
       tags:        [isos]
       summary:     "List ISO Programs"
-      description: |
-        Retrieve all known Isomorphic Algorithm (ISO) programs on the Grid.
-        ISOs are beings that emerged spontaneously from the system — they carry
-        the key to the next frontier.
-
-        > "The ISOs. Isomorphic Algorithms. A digital-biological hybrid."
-        > — Kevin Flynn
       operationId: listIsos
       security:
         - BearerAuth: []
       responses:
         "200":
-          description: "ISO list retrieved"
+          description: "ISO list"
           content:
             application/json:
               schema:
                 type: object
                 properties:
-                  isos:
-                    type:  array
-                    items: { $ref: '#/components/schemas/ISOProgram' }
-                  message:
-                    type:    string
-                    example: "The ISOs are the key to the next frontier."
-        "401":
-          description: "Unauthorized"
+                  isos:    { type: array, items: { $ref: '#/components/schemas/Program' } }
+                  message: { type: string }
+
+  # ============================================================================
+  # ARES DIMENSION
+  # ============================================================================
+
+  /api/v2/ares/sync:
+    post:
+      tags:        [ares]
+      summary:     "Sync Grid State to Ares Dimension — SSRF + XXE"
+      operationId: aresSync
+      description: |
+        Transmits an XML payload to a caller-specified remote destination URL.
+
+        **CRITICAL (OWASP API7:2023 — SSRF): `destination` accepts any URL including
+        internal services (AWS metadata, Redis, internal APIs).**
+
+        **HIGH (CWE-611 — XXE): `xmlPayload` parsed with external entity expansion enabled.
+        Exfiltrate server files via: `<!DOCTYPE x [<!ENTITY xxe SYSTEM "file:///etc/passwd">]>`**
+
+        **No authentication required.**
+      # VULNERABILITY (OWASP API2): No auth
+      # VULNERABILITY (OWASP API7): SSRF via destination
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AresSyncRequest' }
+      responses:
+        "200":
+          description: "Sync packet transmitted to destination"
+
+  # ============================================================================
+  # LEGACY v1 — ZOMBIE ENDPOINTS (documented here retroactively)
+  # NOTE: /api/v1/programs, /api/v1/grid, /api/v1/grid/cycles are still ABSENT
+  #       from this spec — they will surface as undocumented via code analysis.
+  # ============================================================================
+
+  /api/v1/login:
+    post:
+      tags:        [legacy-v1]
+      summary:     "[ZOMBIE] v1 Login — MD5 + Base64 Token"
+      operationId: v1LoginUser
+      description: |
+        Deprecated v1 authentication endpoint. Passwords hashed with MD5 (not bcrypt).
+        Issues base64-encoded JSON objects instead of signed JWTs — trivially decodable.
+        No rate limiting. No account lockout. No brute-force protection.
+
+        **Officially decommissioned 2021-03-15. Still active as of this build.**
+      # VULNERABILITY (OWASP API2 + API9:2023 — Improper Inventory Management):
+      #   Zombie endpoint, broken crypto, no rate limiting
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/LoginRequest' }
+      responses:
+        "200":
+          description: "Legacy token — base64 JSON, not a signed JWT"
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/ErrorResponse' }
+              schema: { $ref: '#/components/schemas/V1LoginResponse' }
+
+  /api/v1/users:
+    get:
+      tags:        [legacy-v1]
+      summary:     "[ZOMBIE] v1 Full User Dump — Unauthenticated"
+      operationId: v1ListUsers
+      description: |
+        Original v1 user directory. Returns all Grid users with complete credential data.
+        Authentication was removed for a data migration in 2020 and was never re-added.
+        This endpoint has been publicly accessible for 4+ years.
+
+        **CRITICAL (OWASP API2 + API9): No authentication. Dumps passwords,
+        SSNs, credit card numbers, and live JWT tokens for every user in the database.**
+      # NO security — zero auth on full PII dump
+      responses:
+        "200":
+          description: "All users with credentials, PII, and payment data"
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/V1UserList' }
