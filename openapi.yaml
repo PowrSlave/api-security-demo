@@ -1,0 +1,586 @@
+openapi: 3.0.3
+
+# ==============================================================================
+# THE GRID — Flynn's Arcade Systems API
+# TRON ARES Operative Infrastructure | OpenAPI Specification
+#
+# ⚠  INTENTIONALLY INCOMPLETE SPECIFICATION ⚠
+# This document covers only the *officially documented* v2 API surface.
+#
+# The following endpoint categories are DELIBERATELY OMITTED from this spec
+# and will be surfaced only through Checkmarx API Security runtime discovery:
+#
+#   SHADOW APIs  (undocumented endpoints active in code):
+#     - GET  /api/v2/users/export           (no-auth data dump)
+#     - POST /api/v2/admin/users/reset      (admin backdoor)
+#     - DELETE /api/v2/programs/{id}/force  (unauth hard delete)
+#     - GET  /api/v2/grid/ping              (command injection)
+#     - GET  /api/v2/grid/files             (path traversal)
+#     - POST /api/v2/grid/webhook           (SSRF)
+#     - POST /api/v2/programs/execute       (eval RCE)
+#     - GET  /_internal/health/debug        (full secret dump)
+#     - GET  /admin/dashboard               (XSS + admin panel)
+#     - POST /api/v2/ares/sync              (XXE + SSRF)
+#     - GET  /api/v2/ares/portal            (open redirect)
+#
+#   ZOMBIE APIs  (deprecated v1/v0 endpoints never decommissioned):
+#     - GET  /api/v1/programs               (no-auth + NoSQL injection)
+#     - POST /api/v1/login                  (MD5 + base64 auth)
+#     - GET  /api/v1/users                  (no-auth user dump)
+#     - GET  /api/v1/grid                   (credential leak)
+#     - GET  /api/v1/grid/cycles            (no-pagination DoS)
+#     - POST /v0/legacy/programs/restore    (insecure deserialization RCE)
+#     - PUT  /v0/legacy/users/{id}          (prototype pollution)
+#     - GET  /v0/legacy/recon               (full env dump)
+# ==============================================================================
+
+info:
+  title: "THE GRID — Flynn's Arcade Systems API"
+  description: |
+    Official API for the TRON Grid management platform.
+    Provides access to Program management, ISO tracking, Light Cycle operations,
+    and Grid status monitoring.
+
+    **TRON ARES Build** | Flynn's Arcade Systems, Inc. | ENCOM Division
+
+    > "The Grid. A digital frontier. I tried to picture clusters of information
+    > as they moved through the computer." — Kevin Flynn
+
+    **Authentication:** Bearer JWT token obtained via `/api/v2/users/login`.
+    All v2 endpoints require a valid identity disc (JWT) unless otherwise noted.
+
+    **Versioning:** This document covers API version `v2` only.
+    Version `v1` and `v0` endpoints have been officially decommissioned.
+
+  version: "2.0.0"
+  contact:
+    name:  "Flynn's Arcade Systems — Grid Operations"
+    email: "gridops@encom.com"
+    url:   "https://encom.com/grid/api-docs"
+  license:
+    name: "ENCOM Proprietary"
+    url:  "https://encom.com/legal"
+
+servers:
+  - url:         "http://localhost:3000"
+    description: "Local Grid Development Node"
+  - url:         "https://grid.encom.com"
+    description: "Production Grid (Tron City)"
+
+tags:
+  - name:        "programs"
+    description: "Grid Program management — instantiate, query, and manage programs"
+  - name:        "users"
+    description: "Identity and authentication — Grid user management"
+  - name:        "grid"
+    description: "Grid status and Light Cycle operations"
+  - name:        "isos"
+    description: "ISO (Isomorphic Algorithm) program tracking"
+
+# ==============================================================================
+# SECURITY SCHEMES
+# ==============================================================================
+components:
+  securitySchemes:
+    BearerAuth:
+      type:         http
+      scheme:       bearer
+      bearerFormat: JWT
+      description:  "JWT identity disc issued at login. Present in Authorization header."
+
+  # ============================================================================
+  # SCHEMAS
+  # ============================================================================
+  schemas:
+
+    Program:
+      type: object
+      properties:
+        _id:
+          type:    string
+          example: "64a1f2b3c4d5e6f7a8b9c0d1"
+        name:
+          type:    string
+          example: "Tron"
+        identity:
+          type:    string
+          example: "SECURITY_PROGRAM_7"
+        sector:
+          type:    string
+          example: "Outlands"
+        loyalty:
+          type:    string
+          enum:    [USER, CLU, NEUTRAL, ISO]
+          example: "USER"
+        discColor:
+          type:    string
+          example: "blue"
+        isIso:
+          type:    boolean
+          example: false
+        createdAt:
+          type:    string
+          format:  date-time
+
+    ProgramInput:
+      type: object
+      required: [name, identity, sector, loyalty]
+      properties:
+        name:
+          type:    string
+          example: "Quorra"
+        identity:
+          type:    string
+          example: "ISO_QUORRA_9"
+        sector:
+          type:    string
+          example: "Outlands"
+        loyalty:
+          type:    string
+          enum:    [USER, CLU, NEUTRAL, ISO]
+        discColor:
+          type:    string
+          example: "white"
+        isIso:
+          type:    boolean
+          example: true
+
+    ISOProgram:
+      allOf:
+        - $ref: '#/components/schemas/Program'
+        - type: object
+          properties:
+            isIso:
+              type:    boolean
+              example: true
+
+    UserProfile:
+      type: object
+      properties:
+        id:
+          type:    string
+          example: "64a1f2b3c4d5e6f7a8b9c0d2"
+        username:
+          type:    string
+          example: "sam.flynn"
+        email:
+          type:    string
+          format:  email
+          example: "sam.flynn@encom.com"
+        role:
+          type:    string
+          enum:    [admin, operator, program, user]
+          example: "user"
+
+    LoginRequest:
+      type: object
+      required: [username, password]
+      properties:
+        username:
+          type:    string
+          example: "kevin.flynn"
+        password:
+          type:    string
+          format:  password
+          example: "flynns_arcade_1982"
+
+    LoginResponse:
+      type: object
+      properties:
+        token:
+          type:    string
+          example: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+        user:
+          $ref: '#/components/schemas/UserProfile'
+
+    GridStatus:
+      type: object
+      properties:
+        status:
+          type:    string
+          example: "GRID_ONLINE"
+        sector:
+          type:    string
+          example: "Tron City"
+        programs:
+          type:    integer
+          example: 1024
+        activeCycles:
+          type:    integer
+          example: 42
+        masterControl:
+          type:    string
+          example: "CLU 2.0"
+        gridVersion:
+          type:    string
+          example: "TRON-ARES-BUILD-0.9.1"
+
+    LightCycle:
+      type: object
+      properties:
+        _id:
+          type:    string
+          example: "64a1f2b3c4d5e6f7a8b9c0d3"
+        rider:
+          type:    string
+          example: "sam.flynn"
+        sector:
+          type:    string
+          example: "Game Grid"
+        startTime:
+          type:    string
+          format:  date-time
+        isActive:
+          type:    boolean
+          example: true
+
+    CycleInput:
+      type: object
+      required: [rider, sector]
+      properties:
+        rider:
+          type:    string
+          example: "quorra"
+        sector:
+          type:    string
+          example: "Outlands"
+
+    PasswordUpdateRequest:
+      type: object
+      required: [currentPassword, newPassword]
+      properties:
+        currentPassword:
+          type:    string
+          format:  password
+        newPassword:
+          type:    string
+          format:  password
+          minLength: 12
+
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type:    string
+          example: "Program not found on the Grid"
+
+# ==============================================================================
+# PATHS — DOCUMENTED v2 ENDPOINTS ONLY
+# NOTE: Shadow and Zombie endpoints are intentionally absent from this spec.
+#       Checkmarx API Security will surface these through code analysis.
+# ==============================================================================
+paths:
+
+  # ============================================================================
+  # PROGRAMS
+  # ============================================================================
+
+  /api/v2/programs:
+    get:
+      tags:        [programs]
+      summary:     "List Grid Programs"
+      description: |
+        Returns all programs registered in the Grid. Supports filtering by sector,
+        loyalty alignment, and name search.
+
+        **Known Issue:** The `search` parameter performs a Grid-wide text scan.
+      operationId: listPrograms
+      security:
+        - BearerAuth: []
+      parameters:
+        - name:        sector
+          in:          query
+          description: "Filter by Grid sector (e.g., Outlands, Tron City, Sea of Simulation)"
+          required:    false
+          schema:
+            type: string
+            example: "Outlands"
+        - name:        loyalty
+          in:          query
+          description: "Filter by loyalty alignment"
+          required:    false
+          schema:
+            type:  string
+            enum:  [USER, CLU, NEUTRAL, ISO]
+        - name:        search
+          in:          query
+          description: "Search programs by name or identity string"
+          required:    false
+          schema:
+            type:    string
+            example: "tron"
+      responses:
+        "200":
+          description: "Successfully retrieved program list"
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  programs:
+                    type:  array
+                    items: { $ref: '#/components/schemas/Program' }
+                  gridCycles:
+                    type:    integer
+                    example: 1687900000000
+        "401":
+          description: "No identity disc presented"
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        "403":
+          description: "Disc rejected by Grid security"
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+
+    post:
+      tags:        [programs]
+      summary:     "Instantiate a New Program"
+      description: "Create and register a new program on the Grid."
+      operationId: createProgram
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ProgramInput' }
+            example:
+              name:      "Tron"
+              identity:  "SECURITY_PROGRAM_7"
+              sector:    "Tron City"
+              loyalty:   "USER"
+              discColor: "blue"
+              isIso:     false
+      responses:
+        "201":
+          description: "Program instantiated on the Grid"
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type:    string
+                    example: "Program instantiated on the Grid"
+                  program: { $ref: '#/components/schemas/Program' }
+        "401":
+          description: "Unauthorized"
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+
+  /api/v2/programs/{id}:
+    get:
+      tags:        [programs]
+      summary:     "Get Program by ID"
+      description: "Retrieve a specific program's identity disc data by Grid ID."
+      operationId: getProgramById
+      security:
+        - BearerAuth: []
+      parameters:
+        - name:        id
+          in:          path
+          description: "The Grid program MongoDB ObjectId"
+          required:    true
+          schema:
+            type:    string
+            example: "64a1f2b3c4d5e6f7a8b9c0d1"
+      responses:
+        "200":
+          description: "Program found"
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Program' }
+        "404":
+          description: "Program not found on the Grid"
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+
+  # ============================================================================
+  # USERS / AUTHENTICATION
+  # NOTE: /api/v2/users/export is intentionally NOT documented here.
+  #       It is a shadow endpoint that exists in server code with no authentication.
+  # ============================================================================
+
+  /api/v2/users/login:
+    post:
+      tags:        [users]
+      summary:     "Authenticate — Present Identity Disc"
+      description: |
+        Authenticate a Grid user and receive a JWT bearer token.
+        Token must be included in the `Authorization: Bearer <token>` header
+        for all protected endpoints.
+      operationId: loginUser
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/LoginRequest' }
+      responses:
+        "200":
+          description: "Authentication successful — identity disc accepted"
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/LoginResponse' }
+        "401":
+          description: "Identity not recognized — End of Line"
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+
+  /api/v2/users/profile:
+    get:
+      tags:        [users]
+      summary:     "Get Current User Profile"
+      description: "Retrieve the authenticated program's profile information."
+      operationId: getUserProfile
+      security:
+        - BearerAuth: []
+      responses:
+        "200":
+          description: "Profile retrieved"
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/UserProfile' }
+        "401":
+          description: "Unauthorized"
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        "404":
+          description: "Program derezzed or not found"
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+
+  /api/v2/users/password:
+    put:
+      tags:        [users]
+      summary:     "Update Identity Disc Credentials"
+      description: "Change the authenticated program's password."
+      operationId: updatePassword
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PasswordUpdateRequest' }
+      responses:
+        "200":
+          description: "Identity disc updated"
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type:    string
+                    example: "Identity disc updated"
+        "401":
+          description: "Unauthorized"
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+
+  # ============================================================================
+  # GRID OPERATIONS
+  # NOTE: The following are NOT documented and will surface as unknown APIs:
+  #   - GET  /api/v2/grid/ping    (command injection shadow endpoint)
+  #   - GET  /api/v2/grid/files   (path traversal shadow endpoint)
+  #   - POST /api/v2/grid/webhook (SSRF shadow endpoint)
+  # ============================================================================
+
+  /api/v2/grid/status:
+    get:
+      tags:        [grid]
+      summary:     "Get Grid Status"
+      description: "Retrieve the current operational status of the Grid."
+      operationId: getGridStatus
+      security:
+        - BearerAuth: []
+      responses:
+        "200":
+          description: "Grid status retrieved"
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/GridStatus' }
+        "401":
+          description: "Unauthorized"
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+
+  /api/v2/grid/cycles:
+    post:
+      tags:        [grid]
+      summary:     "Initiate a Light Cycle"
+      description: |
+        Launch a new Light Cycle on the specified Grid sector.
+        Returns the cycle identifier for tracking.
+      operationId: createCycle
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CycleInput' }
+      responses:
+        "201":
+          description: "Light Cycle initiated"
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type:    string
+                    example: "Light Cycle initiated"
+                  cycle: { $ref: '#/components/schemas/LightCycle' }
+        "401":
+          description: "Unauthorized"
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+
+  # ============================================================================
+  # ISOs
+  # ============================================================================
+
+  /api/v2/isos:
+    get:
+      tags:        [isos]
+      summary:     "List ISO Programs"
+      description: |
+        Retrieve all known Isomorphic Algorithm (ISO) programs on the Grid.
+        ISOs are beings that emerged spontaneously from the system — they carry
+        the key to the next frontier.
+
+        > "The ISOs. Isomorphic Algorithms. A digital-biological hybrid."
+        > — Kevin Flynn
+      operationId: listIsos
+      security:
+        - BearerAuth: []
+      responses:
+        "200":
+          description: "ISO list retrieved"
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  isos:
+                    type:  array
+                    items: { $ref: '#/components/schemas/ISOProgram' }
+                  message:
+                    type:    string
+                    example: "The ISOs are the key to the next frontier."
+        "401":
+          description: "Unauthorized"
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
