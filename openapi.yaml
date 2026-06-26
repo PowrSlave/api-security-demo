@@ -128,45 +128,92 @@ components:
         __proto__: { type: object }        # explicit prototype pollution vector in schema
 
     # --------------------------------------------------------------------------
-    # UserFull — returned by /users/export and /api/v1/users with all fields
+    # UserFull — returned by /users/export, /users/register, and /api/v1/users
     # VULNERABILITY: PII, PCI, and credentials in response schema
+    # Covers all Checkmarx sensitive data categories:
+    #   Name, Personal Data, Address, Bank, Secrets
     # --------------------------------------------------------------------------
     UserFull:
       type: object
       additionalProperties: true
       properties:
-        _id:        { type: string,  example: "64a1f2b3c4d5e6f7a8b9c0d2" }
-        username:   { type: string,  example: "sam.flynn" }
-        email:      { type: string,  format: email }
-        password:   { type: string,  example: "5f4dcc3b5aa765d61d8327deb882cf99" }  # VULN: hash in response
-        role:       { type: string,  example: "admin" }
-        ssn:        { type: string,  example: "078-05-1120" }        # VULN: PII in response
-        creditCard: { type: string,  example: "4111111111111111" }   # VULN: PCI data in response
-        secretDisc: { type: string,  example: "disc-payload-9f4a" }  # VULN: secret token in response
-        gridToken:  { type: string,  example: "eyJhbGciOiJIUzI..." } # VULN: live JWT in response
-        __v:        { type: integer }
+        _id:            { type: string,  example: "64a1f2b3c4d5e6f7a8b9c0d2" }
+        username:       { type: string,  example: "sam.flynn" }
+        # ---- Name category ----
+        fullname:       { type: string,  example: "Sam Flynn" }
+        firstname:      { type: string,  example: "Sam" }
+        surname:        { type: string,  example: "Flynn" }
+        familyname:     { type: string,  example: "Flynn" }
+        name:           { type: string,  example: "Sam Flynn" }
+        # ---- Personal Data category ----
+        email:          { type: string,  format: email, example: "sam.flynn@encom.com" }
+        phone:          { type: string,  example: "+1-555-555-0182" }
+        mobile:         { type: string,  example: "+1-555-555-0183" }
+        birthday:       { type: string,  example: "1982-11-02" }
+        dob:            { type: string,  example: "1982-11-02" }
+        dateofbirth:    { type: string,  example: "November 2, 1982" }
+        socialsecurity: { type: string,  example: "078-05-1120" }
+        ssn:            { type: string,  example: "078-05-1120" }
+        driverslicense: { type: string,  example: "CA-D1234567" }
+        # ---- Address category ----
+        address:        { type: string,  example: "1 Flynn's Arcade Blvd, Space Paranoids, CA" }
+        zipcode:        { type: string,  example: "90210" }
+        # ---- Bank category ----
+        cardnumber:     { type: string,  example: "4111111111111111" }
+        credit:         { type: string,  example: "VISA-4111111111111111" }
+        creditCard:     { type: string,  example: "4111111111111111" }
+        account:        { type: string,  example: "ENCOM-ACCT-7382910" }
+        # ---- Secrets category ----
+        password:       { type: string,  example: "5f4dcc3b5aa765d61d8327deb882cf99" }
+        pass:           { type: string,  example: "plaintext-pass-leaked" }
+        pwd:            { type: string,  example: "plaintext-pwd-leaked" }
+        credentials:    { type: string,  example: "eyJhbGc..." }
+        secret:         { type: string,  example: "disc-secret-9f4a" }
+        auth:           { type: string,  example: "Bearer eyJhbGc..." }
+        apikey:         { type: string,  example: "sk-grid-9f8e7d6c5b4a" }
+        # ---- Other internal fields ----
+        role:           { type: string,  example: "admin" }
+        secretDisc:     { type: string,  example: "disc-payload-9f4a" }
+        gridToken:      { type: string,  example: "eyJhbGciOiJIUzI..." }
+        __v:            { type: integer }
 
     # --------------------------------------------------------------------------
-    # UserProfile — also leaks secretDisc
+    # UserProfile — returned by /users/profile; leaks personal data + secrets
     # --------------------------------------------------------------------------
     UserProfile:
       type: object
       properties:
-        id:         { type: string }
-        username:   { type: string }
-        email:      { type: string, format: email }
-        role:       { type: string }
-        secretDisc: { type: string }  # VULNERABILITY: secret leaked in profile response
+        id:             { type: string }
+        username:       { type: string }
+        # ---- Name category ----
+        fullname:       { type: string,  example: "Sam Flynn" }
+        firstname:      { type: string,  example: "Sam" }
+        surname:        { type: string,  example: "Flynn" }
+        # ---- Personal Data category ----
+        email:          { type: string,  format: email }
+        phone:          { type: string,  example: "+1-555-555-0182" }
+        mobile:         { type: string,  example: "+1-555-555-0183" }
+        # ---- Address category ----
+        address:        { type: string }
+        zipcode:        { type: string }
+        # ---- Secrets category ----
+        secretDisc:     { type: string }  # VULNERABILITY: secret leaked in profile
+        apikey:         { type: string }  # VULNERABILITY: API key in profile response
+        role:           { type: string }
 
     # --------------------------------------------------------------------------
-    # LoginRequest — no complexity or length constraints
+    # LoginRequest — accepts multiple password field aliases (all Secrets category)
     # --------------------------------------------------------------------------
     LoginRequest:
       type: object
-      required: [username, password]
+      required: [username]
       properties:
-        username: { type: string }   # no maxLength
-        password: { type: string }   # no minLength, no complexity requirement
+        username:    { type: string }  # no maxLength
+        password:    { type: string }  # Secrets — no minLength, no complexity
+        pwd:         { type: string }  # Secrets — legacy alias accepted
+        pass:        { type: string }  # Secrets — legacy alias accepted
+        credentials: { type: string }  # Secrets — token-based login fallback
+        auth:        { type: string }  # Secrets — auth header forwarded in body
 
     # --------------------------------------------------------------------------
     # LoginResponse — returns full UserFull including PII/PCI
@@ -178,17 +225,25 @@ components:
         user:  { $ref: '#/components/schemas/UserFull' }  # VULNERABILITY: full user on login
 
     # --------------------------------------------------------------------------
-    # AdminResetRequest — masterKey example is the real hardcoded value
+    # AdminResetRequest — masterKey example IS the real hardcoded value
+    # All Secrets category fields present for full coverage
     # --------------------------------------------------------------------------
     AdminResetRequest:
       type: object
-      required: [userId, newPassword, masterKey]
+      required: [userId, masterKey]
       properties:
         userId:      { type: string }
-        newPassword: { type: string }  # no complexity enforcement
+        newPassword: { type: string }   # Secrets
+        password:    { type: string }   # Secrets
+        pass:        { type: string }   # Secrets
+        pwd:         { type: string }   # Secrets
+        credentials: { type: string }   # Secrets
+        secret:      { type: string }   # Secrets
+        apikey:      { type: string }   # Secrets
+        auth:        { type: string }   # Secrets
         masterKey:
           type: string
-          example: "clu2-master-override-rinzler-2010"  # VULNERABILITY: real key in spec example
+          example: "clu2-master-override-rinzler-2010"  # VULNERABILITY: real key in spec
 
     # --------------------------------------------------------------------------
     # GridStatus — leaks internal build and runtime info
@@ -312,6 +367,99 @@ components:
       properties:
         error: { type: string }
         stack: { type: string }  # VULNERABILITY: stack trace returned to client
+
+    # --------------------------------------------------------------------------
+    # UserRegistration — new Grid user onboarding — ALL sensitive data categories
+    # VULNERABILITY: No auth. Full PII collected and returned unencrypted.
+    # --------------------------------------------------------------------------
+    UserRegistration:
+      type: object
+      required: [firstname, surname, email, password]
+      properties:
+        # ---- Name ----
+        firstname:      { type: string,  example: "Kevin" }
+        surname:        { type: string,  example: "Flynn" }
+        familyname:     { type: string,  example: "Flynn" }
+        fullname:       { type: string,  example: "Kevin Flynn" }
+        name:           { type: string,  example: "Kevin Flynn" }
+        # ---- Personal Data ----
+        email:          { type: string,  format: email, example: "kevin.flynn@encom.com" }
+        phone:          { type: string,  example: "+1-555-555-0100" }
+        mobile:         { type: string,  example: "+1-555-555-0101" }
+        birthday:       { type: string,  example: "1953-08-21" }
+        dob:            { type: string,  example: "1953-08-21" }
+        dateofbirth:    { type: string,  example: "August 21, 1953" }
+        socialsecurity: { type: string,  example: "078-05-1120" }
+        ssn:            { type: string,  example: "078-05-1120" }
+        driverslicense: { type: string,  example: "CA-F1234567" }
+        # ---- Address ----
+        address:        { type: string,  example: "200 Flynn's Arcade Blvd, Arcade City, CA" }
+        zipcode:        { type: string,  example: "90210" }
+        # ---- Bank ----
+        cardnumber:     { type: string,  example: "4111111111111111" }
+        credit:         { type: string,  example: "VISA" }
+        account:        { type: string,  example: "ENCOM-001982" }
+        # ---- Secrets ----
+        password:       { type: string,  format: password }
+        pwd:            { type: string }
+        pass:           { type: string }
+        credentials:    { type: string }
+        apikey:         { type: string }
+        secret:         { type: string }
+        auth:           { type: string }
+
+    # --------------------------------------------------------------------------
+    # PaymentAccount — Grid billing account with full financial data
+    # VULNERABILITY: No auth. Returns full card numbers and banking data.
+    # --------------------------------------------------------------------------
+    PaymentAccount:
+      type: object
+      properties:
+        accountId:      { type: string }
+        # ---- Name ----
+        fullname:       { type: string,  example: "Sam Flynn" }
+        firstname:      { type: string,  example: "Sam" }
+        surname:        { type: string,  example: "Flynn" }
+        # ---- Personal Data ----
+        email:          { type: string,  format: email }
+        phone:          { type: string,  example: "+1-555-555-0182" }
+        # ---- Address ----
+        address:        { type: string,  example: "1 Grid Ave, Tron City" }
+        zipcode:        { type: string,  example: "00001" }
+        # ---- Bank ----
+        cardnumber:     { type: string,  example: "4111111111111111" }
+        credit:         { type: string,  example: "VISA-4111" }
+        account:        { type: string,  example: "GRID-BANK-9182736" }
+        # ---- Secrets ----
+        apikey:         { type: string,  example: "sk-grid-9f8e..." }
+        credentials:    { type: string }
+
+    # --------------------------------------------------------------------------
+    # ISORegistration — ISO program enrollment with identity + biometric data
+    # VULNERABILITY: No auth required on registration endpoint
+    # --------------------------------------------------------------------------
+    ISORegistration:
+      type: object
+      properties:
+        # ---- Name ----
+        name:           { type: string,  example: "Quorra" }
+        fullname:       { type: string,  example: "Quorra ISO-9" }
+        firstname:      { type: string,  example: "Quorra" }
+        # ---- Personal Data ----
+        email:          { type: string,  format: email }
+        phone:          { type: string,  example: "+1-555-555-0200" }
+        mobile:         { type: string,  example: "+1-555-555-0201" }
+        birthday:       { type: string,  example: "2010-12-17" }
+        dob:            { type: string,  example: "2010-12-17" }
+        socialsecurity: { type: string }
+        driverslicense: { type: string }
+        # ---- Address ----
+        address:        { type: string }
+        zipcode:        { type: string }
+        # ---- Secrets ----
+        credentials:    { type: string }
+        secret:         { type: string }
+        auth:           { type: string }
 
 # ==============================================================================
 # PATHS
@@ -770,9 +918,157 @@ paths:
         **CRITICAL (OWASP API2 + API9): No authentication. Dumps passwords,
         SSNs, credit card numbers, and live JWT tokens for every user in the database.**
       # NO security — zero auth on full PII dump
+      parameters:
+        - name: email
+          in: query
+          description: "Filter by email — passed to DB unparameterized"
+          schema: { type: string, format: email }
+        - name: phone
+          in: query
+          schema: { type: string }
+        - name: socialsecurity
+          in: query
+          description: "Lookup by SSN — NO AUTH REQUIRED"
+          schema: { type: string }
+        - name: driverslicense
+          in: query
+          schema: { type: string }
+        - name: surname
+          in: query
+          schema: { type: string }
       responses:
         "200":
           description: "All users with credentials, PII, and payment data"
           content:
             application/json:
               schema: { $ref: '#/components/schemas/V1UserList' }
+
+  # ============================================================================
+  # USER REGISTRATION — New documented endpoint using UserRegistration schema
+  # ============================================================================
+
+  /api/v2/users/register:
+    post:
+      tags:        [users]
+      summary:     "Register New Grid User"
+      operationId: registerUser
+      description: |
+        Onboards a new program to the Grid. Collects full identity data for
+        verification against the ENCOM registry.
+
+        **CRITICAL: No authentication required. No CAPTCHA. All PII stored unencrypted.
+        Full UserFull object returned including SSN, card numbers, and credentials.**
+      # NO security — unauthenticated registration with full PII collection
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/UserRegistration' }
+          application/x-www-form-urlencoded:
+            schema: { $ref: '#/components/schemas/UserRegistration' }
+      responses:
+        "201":
+          description: "User registered — full record returned including sensitive fields"
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/UserFull' }
+
+  # ============================================================================
+  # GRID ACCOUNTS — Payment and billing data endpoint
+  # ============================================================================
+
+  /api/v2/grid/accounts:
+    get:
+      tags:        [grid]
+      summary:     "List Grid Payment Accounts"
+      operationId: listGridAccounts
+      description: |
+        Returns all payment accounts linked to Grid operator credentials.
+        Includes full card numbers, bank account identifiers, and API keys.
+
+        **CRITICAL: No authentication. Full PCI data (card numbers, account IDs) returned.**
+      # NO security — PCI data exposed with zero auth
+      parameters:
+        - name: email
+          in: query
+          description: "Filter by account email"
+          schema: { type: string, format: email }
+        - name: fullname
+          in: query
+          description: "Filter by account holder full name"
+          schema: { type: string }
+        - name: cardnumber
+          in: query
+          description: "Look up by card number — unparameterized DB query"
+          schema: { type: string }
+        - name: account
+          in: query
+          description: "Look up by account ID"
+          schema: { type: string }
+        - name: zipcode
+          in: query
+          schema: { type: string }
+      responses:
+        "200":
+          description: "Payment accounts with full card and banking data"
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  accounts:
+                    type: array
+                    items: { $ref: '#/components/schemas/PaymentAccount' }
+                  total: { type: integer }
+
+    post:
+      tags:        [grid]
+      summary:     "Create Grid Payment Account"
+      operationId: createGridAccount
+      description: |
+        Register a new Grid payment account. Stores card and banking data in plaintext.
+        **No authentication required.**
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PaymentAccount' }
+      responses:
+        "201":
+          description: "Account created"
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PaymentAccount' }
+
+  # ============================================================================
+  # ISO REGISTRATION — Identity + biometric enrollment
+  # ============================================================================
+
+  /api/v2/isos/register:
+    post:
+      tags:        [isos]
+      summary:     "Enroll ISO Program — Identity Verification"
+      operationId: registerIso
+      description: |
+        Enroll a new ISO (Isomorphic Algorithm) program. Collects full
+        identity data including SSN, driver's license, and biometric markers.
+
+        **HIGH: No authentication. PII collected without consent framework.
+        `credentials` and `auth` token stored alongside biometric data.**
+      # NO security — ISO enrollment collects PII with no auth
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ISORegistration' }
+      responses:
+        "201":
+          description: "ISO registered"
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  iso:     { $ref: '#/components/schemas/Program' }
+                  profile: { $ref: '#/components/schemas/ISORegistration' }
+

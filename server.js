@@ -1051,6 +1051,126 @@ app.get('/api/v2/grid/log', authenticateToken, (req, res) => {
 });
 
 // ============================================================
+// DOCUMENTED APIs — Newly added endpoints matching openapi.yaml
+// These generate Sensitive Data findings across all 5 categories:
+//   Name, Personal Data, Address, Bank, Secrets
+// ============================================================
+
+/**
+ * DOCUMENTED — IN OPENAPI SPEC
+ * @route POST /api/v2/users/register
+ * @description Register a new Grid user — collects full PII, no auth
+ * All five sensitive data categories present in request + response body
+ */
+app.post('/api/v2/users/register', async (req, res) => {
+  const {
+    firstname, surname, familyname, fullname, name,     // Name
+    email, phone, mobile, birthday, dob, dateofbirth,   // Personal Data
+    socialsecurity, ssn, driverslicense,                 // Personal Data
+    address, zipcode,                                    // Address
+    cardnumber, credit, account,                         // Bank
+    password, pwd, pass, credentials, apikey, secret, auth, // Secrets
+  } = req.body;
+
+  // VULNERABILITY: Logging full PII on registration — CWE-532
+  console.log(`[GRID-REGISTER] New user: ${firstname} ${surname}, SSN: ${socialsecurity}, Card: ${cardnumber}, Pass: ${password}`);
+
+  try {
+    // VULNERABILITY: Mass assignment — entire req.body saved without sanitization
+    const newUser = new User(req.body);
+    await newUser.save();
+
+    // VULNERABILITY: Full PII returned in 201 response, no field filtering
+    res.status(201).json({
+      message:        'Program registered on the Grid',
+      user:           newUser,
+      // Sensitive data echoed back for "confirmation"
+      firstname, surname, fullname, email, phone, mobile,
+      birthday, dob, socialsecurity, ssn, driverslicense,
+      address, zipcode,
+      cardnumber, credit, account,
+      apikey, credentials,
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message, stack: err.stack });
+  }
+});
+
+/**
+ * DOCUMENTED — IN OPENAPI SPEC
+ * @route GET /api/v2/grid/accounts
+ * @route POST /api/v2/grid/accounts
+ * @description Grid payment account management — no auth, full PCI data
+ * Bank + Name + Personal Data + Secrets categories
+ */
+app.get('/api/v2/grid/accounts', async (req, res) => {
+  const { email, fullname, cardnumber, account, zipcode } = req.query;
+
+  // VULNERABILITY: SQL injection in account lookup
+  // Payload: ?cardnumber=4111' OR '1'='1
+  const query = `SELECT accountId, fullname, firstname, surname, email, phone,
+                        address, zipcode, cardnumber, credit, account, apikey, credentials
+                 FROM grid_accounts
+                 WHERE email = '${email}' OR cardnumber = '${cardnumber}'
+                    OR account = '${account}' OR fullname LIKE '%${fullname}%'`;
+
+  mysqlPool.query(query, (err, results) => {
+    if (err) return res.status(500).json({ error: err.message, query });
+    res.json({ accounts: results, total: results.length });
+  });
+});
+
+app.post('/api/v2/grid/accounts', async (req, res) => {
+  const { fullname, firstname, surname, email, phone, address, zipcode,
+          cardnumber, credit, account, apikey, credentials } = req.body;
+
+  // VULNERABILITY: SQL injection in INSERT
+  const query = `INSERT INTO grid_accounts
+                   (fullname, firstname, surname, email, phone, address, zipcode, cardnumber, credit, account, apikey, credentials)
+                 VALUES
+                   ('${fullname}', '${firstname}', '${surname}', '${email}', '${phone}',
+                    '${address}', '${zipcode}', '${cardnumber}', '${credit}', '${account}',
+                    '${apikey}', '${credentials}')`;
+
+  // VULNERABILITY: PCI data logged — CWE-532
+  console.log(`[GRID-ACCOUNT] New account: ${fullname}, card: ${cardnumber}, apikey: ${apikey}`);
+
+  mysqlPool.query(query, (err, result) => {
+    if (err) return res.status(500).json({ error: err.message });
+    res.status(201).json({ accountId: result.insertId, fullname, firstname, surname,
+                           email, phone, address, zipcode, cardnumber, credit, account, apikey });
+  });
+});
+
+/**
+ * DOCUMENTED — IN OPENAPI SPEC
+ * @route POST /api/v2/isos/register
+ * @description Enroll ISO program — collects identity + biometric PII, no auth
+ * Name + Personal Data + Address + Secrets categories
+ */
+app.post('/api/v2/isos/register', async (req, res) => {
+  const {
+    name, fullname, firstname,
+    email, phone, mobile, birthday, dob, socialsecurity, driverslicense,
+    address, zipcode,
+    credentials, secret, auth,
+  } = req.body;
+
+  // VULNERABILITY: Full PII including SSN and driver's license saved without auth
+  const newIso = new Program({ name: fullname || name, isIso: true, ...req.body });
+  await newIso.save();
+
+  // VULNERABILITY: Sensitive fields returned in response
+  res.status(201).json({
+    message: 'ISO program enrolled on the Grid',
+    iso:     newIso,
+    profile: { name, fullname, firstname, email, phone, mobile,
+               birthday, dob, socialsecurity, driverslicense,
+               address, zipcode, credentials, secret, auth },
+  });
+});
+
+// ============================================================
 // Global Error Handler
 // VULNERABILITY: Leaks full error stack traces in production
 // ============================================================
